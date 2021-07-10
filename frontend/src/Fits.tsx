@@ -12,6 +12,10 @@ import {
 } from './common';
 
 function addParam(search: URLSearchParams, name: string, val: string) {
+	// Prevent duplicates.
+	if (search.getAll(name).includes(val)) {
+		return search;
+	}
 	search.append(name, val);
 	return search;
 }
@@ -44,9 +48,12 @@ export default function Fits() {
 
 	useEffect(() => {
 		const search = location.search;
-		Fetch<FitsData>('Fits' + location.search, data => {
+		Fetch<FitsData>('Fits' + location.search, (data) => {
 			if (window.location.search !== search) {
 				return;
+			}
+			if (data.Fits) {
+				data.Fits.forEach(populateFitData);
 			}
 			setTitle();
 			setData(data);
@@ -62,7 +69,7 @@ export default function Fits() {
 			{Object.keys(data.Filter).length ? (
 				<div className={flexChildrenClass}>
 					{Object.entries(data.Filter).map(([type, items]) =>
-						items.map(item => (
+						items.map((item) => (
 							<div key={item.ID} className="ma1">
 								filter by {type}: {item.Name}
 								{item.Group ? (
@@ -102,7 +109,7 @@ export default function Fits() {
 				</div>
 			) : null}
 			<div className={flexChildrenClass}>
-				<FitsTable data={data.Fits || []} />
+				<FitsTable data={(data.Fits || []).map(makeFitSummary)} />
 			</div>
 		</div>
 	);
@@ -180,7 +187,7 @@ function SlotSummary(props: { items: ItemCharge[] }) {
 	}
 	const counts: { [name: string]: number } = {};
 	const ids: { [name: string]: number } = {};
-	props.items.forEach(v => {
+	props.items.forEach((v) => {
 		if (!v.Name) {
 			return;
 		}
@@ -226,7 +233,107 @@ interface FitsData {
 		item: ItemCharge[];
 		ship: ItemCharge[];
 	};
-	Fits: FitSummary[];
+	Fits: FitData[];
+}
+
+export interface FitData {
+	// Populated from web request.
+	Killmail: number;
+	Ship: number;
+	Cost: number;
+	Names: {
+		[key: string]: {
+			id: number;
+			name: string;
+			category: string;
+			group: number;
+			group_name: string;
+			slot: string | null;
+		};
+	};
+	Items: {
+		item_type_id: number;
+		flag: number;
+	}[];
+
+	// Computed.
+	Slots: {
+		[key: string]: ItemCharge[];
+	};
+	ShipName: string;
+}
+
+export function populateFitData(obj: FitData) {
+	obj.Slots = {};
+	['lo', 'med', 'hi', 'rig', 'sub'].forEach((slot) => {
+		obj.Slots[slot] = Array(8);
+	});
+	if (!obj.Items || !obj.Names[obj.Ship]) {
+		obj.ShipName = 'TODO';
+		return;
+	}
+	obj.Items.forEach((item) => {
+		const id = item.item_type_id;
+		const flag = item.flag;
+		if (!obj.Names[id]) {
+			return;
+		}
+		const { name, group, slot, category } = obj.Names[id];
+		if (!slot) {
+			return;
+		}
+		let offset;
+		if (flag >= 27 && flag <= 34) {
+			offset = 27;
+		} else if (flag >= 19 && flag <= 26) {
+			offset = 19;
+		} else if (flag >= 11 && flag <= 18) {
+			offset = 11;
+		} else if (flag >= 92 && flag <= 99) {
+			offset = 92;
+		} else if (flag >= 125 && flag <= 132) {
+			offset = 125;
+		} else {
+			return;
+		}
+		const slot_idx = flag - offset;
+		if (!obj.Slots[slot][slot_idx]) {
+			obj.Slots[slot][slot_idx] = {
+				ID: 0,
+				Name: '',
+				Group: 0,
+				Charge: undefined,
+			};
+		}
+		if (category === 'charge') {
+			obj.Slots[slot][slot_idx].Charge = {
+				ID: id,
+				Name: name,
+			};
+		} else {
+			obj.Slots[slot][slot_idx].ID = id;
+			obj.Slots[slot][slot_idx].Name = name;
+			obj.Slots[slot][slot_idx].Group = group;
+		}
+	});
+	obj.ShipName = obj.Names[obj.Ship].name;
+}
+
+export function makeFitSummary(fit: FitData): FitSummary {
+	const summary: FitSummary = {
+		Killmail: fit.Killmail,
+		Ship: fit.Ship,
+		Name: fit.ShipName,
+		Cost: fit.Cost,
+		Hi: fit.Slots['hi'].filter(populatedItem),
+		Med: fit.Slots['med'].filter(populatedItem),
+		Lo: fit.Slots['lo'].filter(populatedItem),
+	};
+	return summary;
+}
+
+function populatedItem(item: ItemCharge) {
+	return item.Name;
 }
 
 export interface FitSummary {
