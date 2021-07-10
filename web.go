@@ -31,8 +31,7 @@ var ITEMS_JSON []byte
 type WebContext struct {
 	DB           *sql.DB
 	X            *sqlx.DB
-	Items        map[int32]Item
-	Groups       map[int32]Group
+	Data         SDEData
 	enableTiming bool
 
 	lock        sync.RWMutex
@@ -40,21 +39,38 @@ type WebContext struct {
 	queries     map[string]int64
 }
 
-type Item struct {
-	ID    int32
-	Name  string
-	Lower string
-	Group int32
+func (d *DBKillmail) toFK(s *SDEData) FittingsKillmail {
+	f := FittingsKillmail{
+		ID:     d.ID,
+		Cost:   d.Cost,
+		Ship:   s.Items[d.Ship],
+		Charge: []Item{},
+	}
+	f.Hi = fromDBItem(s, d.Hi)
+	f.Med = fromDBItem(s, d.Med)
+	f.Lo = fromDBItem(s, d.Lo)
+	f.Rig = fromDBItem(s, d.Rig)
+	f.Sub = fromDBItem(s, d.Sub)
+	for _, c := range d.QueryItems {
+		item := s.Items[c]
+		if s.Groups[item.Group].IsCharge() {
+			f.Charge = append(f.Charge, item)
+		}
+	}
+	return f
 }
 
-type Group struct {
-	Name     string
-	Lower    string
-	Category int32
-}
-
-func (g Group) IsCharge() bool {
-	return g.Category == 8
+func fromDBItem(s *SDEData, c [8]DBItem) [8]ItemCharge {
+	var d [8]ItemCharge
+	for i, ic := range c {
+		d[i].ID = ic.ID
+		d[i].Name = s.Items[ic.ID].Name
+		if ic.Charge != 0 {
+			item := s.NamedItem(ic.Charge)
+			d[i].Charge = &item
+		}
+	}
+	return d
 }
 
 func web(port string, dbURL string) {
@@ -64,15 +80,9 @@ func web(port string, dbURL string) {
 	s := &WebContext{
 		DB:           db,
 		X:            sqlx.NewDb(db, "postgres"),
+		Data:         MakeSDEData(),
 		enableTiming: true,
 		queries:      make(map[string]int64),
-	}
-
-	if err := json.Unmarshal(GROUPS_JSON, &s.Groups); err != nil {
-		panic(err)
-	}
-	if err := json.Unmarshal(ITEMS_JSON, &s.Items); err != nil {
-		panic(err)
 	}
 
 	mux := http.NewServeMux()
@@ -146,17 +156,15 @@ func (s *WebContext) Fit(
 	if id == "" {
 		return nil, errors.New("missing fit id")
 	}
-	var ret struct {
-		Killmail int64
-		Ship     int32
-		Cost     int64
-		Names    json.RawMessage
-		Items    json.RawMessage
-	}
-	if err := s.DB.QueryRowContext(ctx, `SELECT killmail, ship, cost, names, items from fits where killmail = $1`, id).Scan(&ret.Killmail, &ret.Ship, &ret.Cost, &ret.Names, &ret.Items); err != nil {
+	var dbkm DBKillmail
+	var raw json.RawMessage
+	if err := s.DB.QueryRowContext(ctx, `SELECT data FROM fits where killmail = $1`, id).Scan(&raw); err != nil {
 		return nil, err
 	}
-	return ret, nil
+	if err := json.Unmarshal(raw, &dbkm); err != nil {
+		return nil, err
+	}
+	return dbkm.toFK(&s.Data), nil
 }
 
 func (s *WebContext) Fits(
@@ -164,13 +172,7 @@ func (s *WebContext) Fits(
 ) (interface{}, error) {
 	var ret struct {
 		Filter map[string][]Item
-		Fits   []struct {
-			Killmail int64
-			Ship     int32
-			Cost     int64
-			Names    json.RawMessage
-			Items    json.RawMessage
-		}
+		Fits   []FittingsKillmail
 	}
 	ret.Filter = map[string][]Item{}
 	r.ParseForm()
@@ -178,7 +180,7 @@ func (s *WebContext) Fits(
 	items := map[int]struct{}{}
 	if ship, _ := strconv.Atoi(r.Form.Get("ship")); ship > 0 {
 		items[ship] = struct{}{}
-		ret.Filter["ship"] = append(ret.Filter["ship"], s.Items[int32(ship)])
+		ret.Filter["ship"] = append(ret.Filter["ship"], s.Data.Items[ship])
 	}
 	for _, item := range r.Form["item"] {
 		itemid, _ := strconv.Atoi(item)
@@ -186,19 +188,11 @@ func (s *WebContext) Fits(
 			continue
 		}
 		items[itemid] = struct{}{}
-		ret.Filter["item"] = append(ret.Filter["item"], s.Items[int32(itemid)])
+		ret.Filter["item"] = append(ret.Filter["item"], s.Data.Items[itemid])
 	}
 
 	var query strings.Builder
-	query.WriteString(`
-		SELECT
-			killmail,
-			ship,
-			cost,
-			names,
-			items
-		FROM
-			killmail_results`)
+	query.WriteString(`SELECT data FROM killmail_results`)
 	var args []interface{}
 	if len(items) == 0 {
 		query.WriteString("_root")
@@ -210,14 +204,30 @@ func (s *WebContext) Fits(
 		query.WriteString(` WHERE query_id = $1`)
 		args = append(args, queryID)
 	}
-	fmt.Println(query.String())
 
-	selectT := timing.NewMetric("select").Start()
+	selectT := timing.NewMetric("select first result").Start()
 	// TODO: handle case if mz restarts and there's no queryid. Maybe detectable if
 	// no rows?
-	err := s.X.SelectContext(ctx, &ret.Fits, query.String(), args...)
+	rows, err := s.DB.QueryContext(ctx, query.String(), args...)
 	selectT.Stop()
 	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ret.Fits = make([]FittingsKillmail, 0)
+	var dbkm DBKillmail
+	var raw json.RawMessage
+	for rows.Next() {
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &dbkm); err != nil {
+			return nil, err
+		}
+		fk := dbkm.toFK(&s.Data)
+		ret.Fits = append(ret.Fits, fk)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return ret, nil
@@ -226,7 +236,7 @@ func (s *WebContext) Fits(
 func (s *WebContext) QueryID(ctx context.Context, itemMap map[int]struct{}) (int64, error) {
 	// Dedup and sort to make canonical.
 	items := make([]int, 0, len(itemMap))
-	for item, _ := range itemMap {
+	for item := range itemMap {
 		items = append(items, item)
 	}
 	sort.Ints(items)
@@ -255,13 +265,11 @@ func (s *WebContext) QueryID(ctx context.Context, itemMap map[int]struct{}) (int
 	if err := s.DB.QueryRowContext(ctx, "SELECT id FROM queries WHERE items = $1", name).Scan(&query_id); err == nil {
 		// This query already has an id, use it.
 		s.queries[name] = query_id
-		fmt.Println("ALREADY", query_id, name)
 		return query_id, nil
 	}
 
 	for {
 		s.lastQueryID++
-		fmt.Println("MAYBE", s.lastQueryID, "FOR", name)
 		if err := s.DB.QueryRowContext(ctx, "SELECT id FROM queries WHERE id = $1", s.lastQueryID).Scan(&query_id); err == sql.ErrNoRows {
 			// Ok.
 		} else if err == nil {
@@ -272,7 +280,7 @@ func (s *WebContext) QueryID(ctx context.Context, itemMap map[int]struct{}) (int
 		} else {
 			return 0, err
 		}
-		// TODO: add timing
+		// TODO: add timing to see how long it takes for results to pop out.
 		if _, err := s.DB.ExecContext(ctx, "INSERT INTO queries VALUES ($1, $2)", s.lastQueryID, name); err != nil {
 			return 0, err
 		}
@@ -283,7 +291,7 @@ func (s *WebContext) QueryID(ctx context.Context, itemMap map[int]struct{}) (int
 	}
 }
 
-var searchCategories = map[int32]string{
+var searchCategories = map[int]string{
 	6:  "ship",
 	7:  "item", // module
 	8:  "item", // charge
@@ -296,7 +304,7 @@ func (s *WebContext) Search(
 	type Result struct {
 		Type string
 		Name string
-		ID   int32
+		ID   int
 	}
 	var ret struct {
 		Search  string
@@ -320,7 +328,7 @@ func (s *WebContext) Search(
 		}
 		return containsAll
 	}
-	for id, group := range s.Groups {
+	for id, group := range s.Data.Groups {
 		if !match(group.Lower) {
 			continue
 		}
@@ -330,11 +338,11 @@ func (s *WebContext) Search(
 			ID:   id,
 		})
 	}
-	for id, item := range s.Items {
+	for id, item := range s.Data.Items {
 		if !match(item.Lower) {
 			continue
 		}
-		if typ := searchCategories[s.Groups[item.Group].Category]; typ != "" {
+		if typ := searchCategories[s.Data.Groups[item.Group].Category]; typ != "" {
 			ret.Results = append(ret.Results, Result{
 				Type: typ,
 				Name: item.Name,

@@ -74,7 +74,6 @@ func main() {
 			}
 		}
 		f.WriteString(";\n")
-		f.WriteString("CREATE INDEX ON groups (id);\n")
 		r.Close()
 		if err := f.Close(); err != nil {
 			panic(err)
@@ -143,7 +142,6 @@ func main() {
 			}
 		}
 		f.WriteString(";\n")
-		f.WriteString("CREATE INDEX ON items (id);\n")
 		r.Close()
 		if err := f.Close(); err != nil {
 			panic(err)

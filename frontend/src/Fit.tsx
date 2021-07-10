@@ -11,7 +11,7 @@ import {
 	savedPrefix,
 } from './common';
 import { Link, useParams } from 'react-router-dom';
-import { FitData, populateFitData, makeFitSummary } from './Fits';
+import { FitData, makeFitSummary } from './Fits';
 
 export default function Fit() {
 	const { id } = useParams();
@@ -25,9 +25,8 @@ export default function Fit() {
 	useEffect(() => {
 		setTitle();
 		Fetch<FitData>('Fit?id=' + id, (data) => {
-			populateFitData(data);
 			setData(data);
-			setTitle(data.ShipName);
+			setTitle(data.Ship.Name);
 		});
 	}, [id]);
 
@@ -51,7 +50,7 @@ export default function Fit() {
 		<div className="flex flex-wrap">
 			<div className={flexChildrenClass}>
 				<h2>
-					<Link to={'/?ship=' + data.Ship}>{data.ShipName}</Link>
+					<Link to={'/?ship=' + data.Ship.ID}>{data.Ship.Name}</Link>
 					<span
 						style={{ color: 'var(--emph-medium)' }}
 						className="pointer fr f6 pa1"
@@ -60,7 +59,7 @@ export default function Fit() {
 						[{saved ? 'un' : ''}save]
 					</span>
 				</h2>
-				<Render id={data.Ship} size={256} alt={data.ShipName} />
+				<Render id={data.Ship.ID} size={256} alt={data.Ship.Name} />
 				<pre className="bg-dp04 pa1 f6">{TextFit(data)}</pre>
 				{data.Cost ? (
 					<div>
@@ -68,38 +67,38 @@ export default function Fit() {
 					</div>
 				) : null}
 				<div className="list">
-					<a href={'https://zkillboard.com/kill/' + data.Killmail + '/'}>
+					<a href={'https://zkillboard.com/kill/' + data.ID + '/'}>
 						zkillboard
 					</a>
-					<Ref ID={data.Ship} />
+					<Ref ID={data.Ship.ID} />
 				</div>
 			</div>
 			<div className={flexChildrenClass}>
 				<div>
 					<h3>high slots</h3>
-					<Slots items={data.Slots['hi']} />
+					<Slots items={data.Hi} />
 				</div>
 				<div>
 					<h3>medium slots</h3>
-					<Slots items={data.Slots['med']} />
+					<Slots items={data.Med} />
 				</div>
 				<div>
 					<h3>low slots</h3>
-					<Slots items={data.Slots['lo']} />
+					<Slots items={data.Lo} />
 				</div>
 				<div>
 					<h3>rigs</h3>
-					<Slots items={data.Slots['rig']} />
+					<Slots items={data.Rig} />
 				</div>
-				{data.Slots['sub'][0] ? (
+				{data.Sub[0] ? (
 					<div>
 						<h3>subsystems</h3>
-						<Slots items={data.Slots['sub']} />
+						<Slots items={data.Sub} />
 					</div>
 				) : null}
 				<div>
 					<h3>charges</h3>
-					<Slots items={data.Slots['charges']} />
+					<Slots items={data.Charge} />
 				</div>
 			</div>
 		</div>
@@ -129,12 +128,12 @@ function Slots(props: { items: ItemCharge[] }) {
 }
 
 function TextFit(data: FitData) {
-	const fit = ['[' + data.Names[data.Ship].name + ']'];
-	['lo', 'med', 'hi', 'rig', 'sub'].forEach((slot, idx) => {
+	const fit = ['[' + data.Ship.Name + ']'];
+	[data.Lo, data.Med, data.Hi, data.Rig, data.Sub].forEach((slot, idx) => {
 		if (idx > 0) {
 			fit.push('');
 		}
-		data.Slots[slot].forEach((v) => {
+		slot.forEach((v) => {
 			if (!v.Name) {
 				return;
 			}

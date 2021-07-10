@@ -52,9 +52,6 @@ export default function Fits() {
 			if (window.location.search !== search) {
 				return;
 			}
-			if (data.Fits) {
-				data.Fits.forEach(populateFitData);
-			}
 			setTitle();
 			setData(data);
 		});
@@ -237,97 +234,26 @@ interface FitsData {
 }
 
 export interface FitData {
-	// Populated from web request.
-	Killmail: number;
-	Ship: number;
+	ID: number;
+	Ship: ItemCharge;
 	Cost: number;
-	Names: {
-		[key: string]: {
-			id: number;
-			name: string;
-			category: string;
-			group: number;
-			group_name: string;
-			slot: string | null;
-		};
-	};
-	Items: {
-		item_type_id: number;
-		flag: number;
-	}[];
-
-	// Computed.
-	Slots: {
-		[key: string]: ItemCharge[];
-	};
-	ShipName: string;
-}
-
-export function populateFitData(obj: FitData) {
-	obj.Slots = {};
-	['lo', 'med', 'hi', 'rig', 'sub'].forEach((slot) => {
-		obj.Slots[slot] = Array(8);
-	});
-	if (!obj.Items || !obj.Names[obj.Ship]) {
-		obj.ShipName = 'TODO';
-		return;
-	}
-	obj.Items.forEach((item) => {
-		const id = item.item_type_id;
-		const flag = item.flag;
-		if (!obj.Names[id]) {
-			return;
-		}
-		const { name, group, slot, category } = obj.Names[id];
-		if (!slot) {
-			return;
-		}
-		let offset;
-		if (flag >= 27 && flag <= 34) {
-			offset = 27;
-		} else if (flag >= 19 && flag <= 26) {
-			offset = 19;
-		} else if (flag >= 11 && flag <= 18) {
-			offset = 11;
-		} else if (flag >= 92 && flag <= 99) {
-			offset = 92;
-		} else if (flag >= 125 && flag <= 132) {
-			offset = 125;
-		} else {
-			return;
-		}
-		const slot_idx = flag - offset;
-		if (!obj.Slots[slot][slot_idx]) {
-			obj.Slots[slot][slot_idx] = {
-				ID: 0,
-				Name: '',
-				Group: 0,
-				Charge: undefined,
-			};
-		}
-		if (category === 'charge') {
-			obj.Slots[slot][slot_idx].Charge = {
-				ID: id,
-				Name: name,
-			};
-		} else {
-			obj.Slots[slot][slot_idx].ID = id;
-			obj.Slots[slot][slot_idx].Name = name;
-			obj.Slots[slot][slot_idx].Group = group;
-		}
-	});
-	obj.ShipName = obj.Names[obj.Ship].name;
+	Hi: ItemCharge[];
+	Med: ItemCharge[];
+	Lo: ItemCharge[];
+	Rig: ItemCharge[];
+	Sub: ItemCharge[];
+	Charges: ItemCharge[];
 }
 
 export function makeFitSummary(fit: FitData): FitSummary {
 	const summary: FitSummary = {
-		Killmail: fit.Killmail,
-		Ship: fit.Ship,
-		Name: fit.ShipName,
+		Killmail: fit.ID,
+		Ship: fit.Ship.ID,
+		Name: fit.Ship.Name,
 		Cost: fit.Cost,
-		Hi: fit.Slots['hi'].filter(populatedItem),
-		Med: fit.Slots['med'].filter(populatedItem),
-		Lo: fit.Slots['lo'].filter(populatedItem),
+		Hi: fit.Hi.filter(populatedItem),
+		Med: fit.Med.filter(populatedItem),
+		Lo: fit.Lo.filter(populatedItem),
 	};
 	return summary;
 }
