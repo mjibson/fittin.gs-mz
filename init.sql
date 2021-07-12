@@ -1,12 +1,12 @@
 DROP SOURCE IF EXISTS zk_bytes_json CASCADE;
 DROP TABLE IF EXISTS queries CASCADE;
 
-CREATE SOURCE zk_bytes_json
-	FROM FILE '/home/mjibson/scratch/fit-mz/out.json'
+CREATE MATERIALIZED SOURCE zk_bytes_json
+	FROM FILE '/home/mjibson/scratch/fit-mz/short.json'
 	WITH (tail=true)
 	FORMAT BYTES;
 
-CREATE MATERIALIZED VIEW fits AS
+CREATE VIEW fits AS
 	SELECT
 		(data->'ID')::INT AS killmail,
 		data
@@ -14,15 +14,23 @@ CREATE MATERIALIZED VIEW fits AS
 		(SELECT CONVERT_FROM(data, 'utf8')::JSONB data FROM zk_bytes_json);
 CREATE INDEX ON fits(killmail);
 
-CREATE MATERIALIZED VIEW killmail_results_root AS
+CREATE VIEW killmail_root AS
 	SELECT
-		data
+		killmail
 	FROM
 		fits
 	ORDER BY
 		killmail DESC
 	LIMIT
 		100;
+
+CREATE VIEW killmail_results_root AS
+	SELECT
+		fits.data
+	FROM
+		killmail_root, fits
+	WHERE
+		killmail_root.killmail = fits.killmail;
 
 CREATE TABLE queries (id INT8 not null, items jsonb NOT NULL);
 
@@ -92,7 +100,7 @@ CREATE VIEW results AS
 CREATE MATERIALIZED VIEW killmail_results AS
 	SELECT
 		results.id AS query_id,
-		fits.*
+		fits.data
 	FROM
 		results, fits
 	WHERE
